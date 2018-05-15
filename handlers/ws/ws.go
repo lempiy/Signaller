@@ -49,13 +49,6 @@ func Handle(cluster *room.Cluster) echo.HandlerFunc {
 		}
 
 		space := c.QueryParam("space")
-		if space == "" {
-			ws.WriteMessage(websocket.CloseMessage,
-				websocket.FormatCloseMessage(4001, "Connection space cannot be empty"),
-			)
-			ws.Close()
-			return nil
-		}
 
 		name := c.QueryParam("name")
 		if name == "" {
@@ -70,15 +63,22 @@ func Handle(cluster *room.Cluster) echo.HandlerFunc {
 		read := make(chan []byte)
 		die := make(chan struct{})
 
-		if hub = cluster.Get(space); hub == nil {
-			hub = room.NewHub(space, cluster)
-			cluster.Add(hub)
+		if space != "" {
+			if hub = cluster.Get(space); hub == nil {
+				log.Printf("Hub with ID %s not found in the cluster, it will be created", space)
+				hub = room.NewHub(space, cluster)
+				cluster.Add(hub)
+			} else {
+				log.Printf("Found hub with ID %s hub length before connection %d", space, hub.Length())
+			}
+		} else {
+			hub = cluster.General
 		}
 
 		client = room.NewClient(send, read, die, name)
 		hub.Add(client)
 		deadRead := make(chan struct{})
-
+		log.Printf("Client %s connected to hub %s", name, hub.ID)
 		go func() {
 			defer ws.Close()
 			ws.SetReadDeadline(time.Now().Add(pongWait))
@@ -89,10 +89,12 @@ func Handle(cluster *room.Cluster) echo.HandlerFunc {
 			for {
 				_, message, err := ws.ReadMessage()
 				if err != nil {
+					hub = client.Hub
 					if websocket.IsCloseError(err, closeErrorCodes...) {
 						ws.Close()
 						client.Die()
-						if hub.Length() == 0 {
+						log.Printf("Hub with ID %s has length %d", hub.ID, hub.Length())
+						if hub.Length() == 0 && hub != cluster.General {
 							cluster.Remove(hub.ID)
 							hub.Die()
 						}
@@ -101,7 +103,8 @@ func Handle(cluster *room.Cluster) echo.HandlerFunc {
 					}
 					ws.Close()
 					client.Die()
-					if hub.Length() == 0 {
+					log.Printf("Hub with ID %s has length %d", hub.ID, hub.Length())
+					if hub.Length() == 0 && hub != cluster.General {
 						cluster.Remove(hub.ID)
 						hub.Die()
 					}
@@ -126,9 +129,11 @@ func Handle(cluster *room.Cluster) echo.HandlerFunc {
 				ws.SetWriteDeadline(time.Now().Add(writeWait))
 				err := ws.WriteMessage(websocket.PingMessage, []byte{})
 				if err != nil {
+					hub = client.Hub
 					ws.Close()
 					client.Die()
-					if hub.Length() == 0 {
+					log.Printf("Hub with ID %s has length %d", hub.ID, hub.Length())
+					if hub.Length() == 0 && hub != cluster.General {
 						cluster.Remove(hub.ID)
 						hub.Die()
 					}

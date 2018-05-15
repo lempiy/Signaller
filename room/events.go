@@ -20,7 +20,8 @@ const (
 	EVENT_ANSWER_CONNECTION    = "EVENT_ANSWER_CONNECTION"
 	EVENT_CANDIDATE_CONNECTION = "EVENT_CANDIDATE_CONNECTION"
 
-	EVENT_ERROR = "EVENT_ERROR"
+	EVENT_ERROR   = "EVENT_ERROR"
+	EVENT_CONFIRM = "EVENT_CONFIRM"
 
 	IdLength = 12
 )
@@ -70,8 +71,17 @@ type EventError struct {
 	Payload ErrorPayload `json:"payload"`
 }
 
+type EventConfirm struct {
+	*EventHead
+	Payload ConfirmPayload `json:"payload"`
+}
+
 type ErrorPayload struct {
 	Info string `json:"info"`
+}
+
+type ConfirmPayload struct {
+	Success bool `json:"success"`
 }
 
 type HubRemovedPayload struct {
@@ -106,14 +116,15 @@ func consumeNewHubEvent(c *Client, event Event) {
 	if err := jsoniter.Unmarshal(*event.Payload, &payload); err != nil {
 		log.Println("consumeNewHubEvent", err)
 	}
-	newHub := NewHub(payload.Name, c.hub.cluster)
-	c.hub.cluster.Add(newHub)
-	c.attachToHub(newHub)
+	newHub := NewHub(payload.Name, c.Hub.cluster)
+	c.Hub.cluster.Add(newHub)
+	newHub.Add(c)
 	emitNewHubCreated(c, newHub.ID)
+	confirmAction(c, event.Id)
 }
 
 func consumeDirectRawEvent(c *Client, event Event) {
-	addressee := c.hub.Get(event.To)
+	addressee := c.Hub.Get(event.To)
 	if addressee == nil {
 		clientNotFound(c, event.To, event.Id)
 		return
@@ -131,10 +142,10 @@ func consumeGetHubs(c *Client, event Event) {
 		EventHead: &EventHead{
 			Id:     event.Id,
 			Action: EVENT_GET_HUBS,
-			To:     c.name,
+			To:     c.Name,
 		},
 		Payload: AllPayload{
-			Hubs: c.hub.cluster.All(),
+			Hubs: c.Hub.cluster.All(),
 		},
 	})
 	if err != nil {
@@ -149,7 +160,7 @@ func clientNotFound(c *Client, name string, id string) {
 		EventHead: &EventHead{
 			Id:     id,
 			Action: EVENT_ERROR,
-			To:     c.name,
+			To:     c.Name,
 		},
 		Payload: ErrorPayload{
 			Info: fmt.Sprintf("Client with name %s not found in your space", name),
@@ -157,6 +168,24 @@ func clientNotFound(c *Client, name string, id string) {
 	})
 	if err != nil {
 		log.Println("clientNotFound", err)
+		return
+	}
+	c.Send(bts)
+}
+
+func confirmAction(c *Client, id string) {
+	bts, err := jsoniter.Marshal(EventConfirm{
+		EventHead: &EventHead{
+			Id:     id,
+			Action: EVENT_CONFIRM,
+			To:     c.Name,
+		},
+		Payload: ConfirmPayload{
+			Success: true,
+		},
+	})
+	if err != nil {
+		log.Println("confirmAction", err)
 		return
 	}
 	c.Send(bts)
@@ -177,7 +206,7 @@ func emitNewHubCreated(c *Client, name string) {
 		log.Println("emitNewHubCreated", err)
 		return
 	}
-	c.hub.cluster.General.Emit(bts)
+	c.Hub.cluster.General.Emit(bts)
 }
 
 func consumeHubRemoved(cluster *Cluster, event EventHubRemoved) {

@@ -41,7 +41,7 @@ func NewHub(id string, cluster *Cluster) *Hub {
 		ID:       id,
 		cluster:  cluster,
 	}
-	log.Println(fmt.Sprintf("Hub with ID %d created...", hub.ID))
+	log.Println(fmt.Sprintf("Hub with ID %s created...", hub.ID))
 	go hub.run()
 	return &hub
 }
@@ -109,7 +109,7 @@ func (hub *Hub) Emit(msg []byte) {
 }
 
 func (hub *Hub) Die() {
-	log.Println(fmt.Sprintf("Hub with ID %d removed...", hub.ID))
+	log.Println(fmt.Sprintf("Hub with ID %s removed...", hub.ID))
 	hub.listener <- commandData{
 		action: die,
 	}
