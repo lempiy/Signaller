@@ -23,6 +23,7 @@ type commandData struct {
 	storeId int
 	result  chan<- *Client
 	length  chan<- int
+	all     chan<- []string
 	data    []byte
 	client  *Client
 }
@@ -49,13 +50,23 @@ func NewHub(id string, cluster *Cluster) *Hub {
 func (hub *Hub) run() {
 	for command := range hub.listener {
 		switch command.action {
+		case all:
+			var all []string
+			for _, client := range hub.pool {
+				all = append(all, client.Name)
+			}
+			command.all <- all
 		case add:
-			hub.pool[command.client.Key] = command.client
+			hub.pool[command.client.Name] = command.client
 			command.client.attachToHub(hub)
 		case get:
 			command.result <- hub.pool[command.key]
 		case remove:
 			delete(hub.pool, command.key)
+			data := getClientRemoved(command.key)
+			for _, client := range hub.pool {
+				client.Send(data)
+			}
 		case length:
 			command.length <- len(hub.pool)
 		case emit:
@@ -66,6 +77,15 @@ func (hub *Hub) run() {
 			return
 		}
 	}
+}
+
+func (hub *Hub) All() []string {
+	result := make(chan []string)
+	hub.listener <- commandData{
+		action: all,
+		all:    result,
+	}
+	return <-result
 }
 
 func (hub *Hub) Add(client *Client) {

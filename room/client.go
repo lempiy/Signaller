@@ -1,6 +1,7 @@
 package room
 
 import (
+	"fmt"
 	"github.com/json-iterator/go"
 	"log"
 )
@@ -9,7 +10,6 @@ type Client struct {
 	send        chan<- []byte
 	read        <-chan []byte
 	Name        string
-	Key         string
 	die         <-chan struct{}
 	Hub         *Hub
 	hubListener chan<- commandData
@@ -20,7 +20,6 @@ func NewClient(send chan<- []byte, read <-chan []byte, die <-chan struct{}, name
 		send: send,
 		read: read,
 		Name: name,
-		Key:  randomId(12),
 		die:  die,
 	}
 	log.Println("Client " + c.Name + " connected...")
@@ -32,7 +31,7 @@ func (c *Client) attachToHub(hub *Hub) {
 	if c.Hub != nil {
 		c.hubListener <- commandData{
 			action: remove,
-			key:    c.Key,
+			key:    c.Name,
 		}
 	}
 	c.Hub = hub
@@ -65,7 +64,7 @@ func (c *Client) Die() {
 	if c.hubListener != nil {
 		c.hubListener <- commandData{
 			action: remove,
-			key:    c.Key,
+			key:    c.Name,
 		}
 	}
 }

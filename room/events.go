@@ -11,10 +11,14 @@ import (
 const (
 	TO_EVERYONE = "*"
 
-	EVENT_NEW_HUB_REQUEST = "EVENT_NEW_HUB_REQUEST"
-	EVENT_NEW_HUB_CREATED = "EVENT_NEW_HUB_CREATED"
-	EVENT_HUB_REMOVED     = "EVENT_HUB_REMOVED"
-	EVENT_GET_HUBS        = "EVENT_GET_HUBS"
+	EVENT_NEW_HUB_REQUEST  = "EVENT_NEW_HUB_REQUEST"
+	EVENT_HUB_CONNECT      = "EVENT_HUB_CONNECT"
+	EVENT_CLIENT_CONNECTED = "EVENT_CLIENT_CONNECTED"
+	EVENT_NEW_HUB_CREATED  = "EVENT_NEW_HUB_CREATED"
+	EVENT_HUB_REMOVED      = "EVENT_HUB_REMOVED"
+	EVENT_CLIENT_REMOVED   = "EVENT_CLIENT_REMOVED"
+	EVENT_GET_CLIENTS      = "EVENT_GET_CLIENTS"
+	EVENT_GET_HUBS         = "EVENT_GET_HUBS"
 
 	EVENT_OFFER_CONNECTION     = "EVENT_OFFER_CONNECTION"
 	EVENT_ANSWER_CONNECTION    = "EVENT_ANSWER_CONNECTION"
@@ -56,6 +60,11 @@ type EventNewHubCreated struct {
 	Payload NewHubPayload `json:"payload"`
 }
 
+type EventClientConnected struct {
+	*EventHead
+	Payload ClientConnectPayload `json:"payload"`
+}
+
 type EventHubRemoved struct {
 	*EventHead
 	Payload HubRemovedPayload `json:"payload"`
@@ -76,6 +85,21 @@ type EventConfirm struct {
 	Payload ConfirmPayload `json:"payload"`
 }
 
+type EventClientRemoved struct {
+	*EventHead
+	Payload ClientRemovedPayload `json:"payload"`
+}
+
+type EventHubConnect struct {
+	*EventHead
+	Payload HubConnectPayload `json:"payload"`
+}
+
+type EventGetClients struct {
+	*EventHead
+	Payload GetClientsPayload `json:"payload"`
+}
+
 type ErrorPayload struct {
 	Info string `json:"info"`
 }
@@ -88,12 +112,32 @@ type HubRemovedPayload struct {
 	Name string `json:"name"`
 }
 
+type HubConnectPayload struct {
+	Name string `json:"name"`
+}
+
+type GetClientsPayload struct {
+	Clients []string `json:"clients"`
+}
+
 type NewHubPayload struct {
+	Name string `json:"name"`
+}
+
+type ClientRemovedPayload struct {
+	Name string `json:"name"`
+}
+
+type ClientConnectPayload struct {
 	Name string `json:"name"`
 }
 
 type AllPayload struct {
 	Hubs []string `json:"hubs"`
+}
+
+type HubClientPayload struct {
+	Clients []string `json:"clients"`
 }
 
 func ConsumeEvent(c *Client, event Event) {
@@ -108,6 +152,10 @@ func ConsumeEvent(c *Client, event Event) {
 		consumeDirectRawEvent(c, event)
 	case EVENT_GET_HUBS:
 		consumeGetHubs(c, event)
+	case EVENT_HUB_CONNECT:
+		consumeHubConnectEvent(c, event)
+	case EVENT_GET_CLIENTS:
+		consumeGetClients(c, event)
 	}
 }
 
@@ -116,10 +164,29 @@ func consumeNewHubEvent(c *Client, event Event) {
 	if err := jsoniter.Unmarshal(*event.Payload, &payload); err != nil {
 		log.Println("consumeNewHubEvent", err)
 	}
+	if h := c.Hub.cluster.Get(payload.Name); h != nil {
+		hubAlreadyExist(c, payload.Name, event.Id)
+		return
+	}
 	newHub := NewHub(payload.Name, c.Hub.cluster)
 	c.Hub.cluster.Add(newHub)
 	newHub.Add(c)
 	emitNewHubCreated(c, newHub.ID)
+	confirmAction(c, event.Id)
+}
+
+func consumeHubConnectEvent(c *Client, event Event) {
+	var payload HubConnectPayload
+	if err := jsoniter.Unmarshal(*event.Payload, &payload); err != nil {
+		log.Println("consumeHubConnectEvent", err)
+	}
+	hub := c.Hub.cluster.Get(payload.Name)
+	if hub == nil {
+		hubNotFound(c, payload.Name, event.Id)
+		return
+	}
+	hub.Add(c)
+	emitClientConnected(c, hub)
 	confirmAction(c, event.Id)
 }
 
@@ -155,6 +222,24 @@ func consumeGetHubs(c *Client, event Event) {
 	c.Send(bts)
 }
 
+func consumeGetClients(c *Client, event Event) {
+	bts, err := jsoniter.Marshal(EventGetClients{
+		EventHead: &EventHead{
+			Id:     event.Id,
+			Action: EVENT_GET_CLIENTS,
+			To:     c.Name,
+		},
+		Payload: GetClientsPayload{
+			Clients: c.Hub.All(),
+		},
+	})
+	if err != nil {
+		log.Println("consumeGetClients", err)
+		return
+	}
+	c.Send(bts)
+}
+
 func clientNotFound(c *Client, name string, id string) {
 	bts, err := jsoniter.Marshal(EventError{
 		EventHead: &EventHead{
@@ -164,6 +249,42 @@ func clientNotFound(c *Client, name string, id string) {
 		},
 		Payload: ErrorPayload{
 			Info: fmt.Sprintf("Client with name %s not found in your space", name),
+		},
+	})
+	if err != nil {
+		log.Println("clientNotFound", err)
+		return
+	}
+	c.Send(bts)
+}
+
+func hubNotFound(c *Client, hubId string, id string) {
+	bts, err := jsoniter.Marshal(EventError{
+		EventHead: &EventHead{
+			Id:     id,
+			Action: EVENT_ERROR,
+			To:     c.Name,
+		},
+		Payload: ErrorPayload{
+			Info: fmt.Sprintf("Hub with id %s not found", hubId),
+		},
+	})
+	if err != nil {
+		log.Println("clientNotFound", err)
+		return
+	}
+	c.Send(bts)
+}
+
+func hubAlreadyExist(c *Client, hubId string, id string) {
+	bts, err := jsoniter.Marshal(EventError{
+		EventHead: &EventHead{
+			Id:     id,
+			Action: EVENT_ERROR,
+			To:     c.Name,
+		},
+		Payload: ErrorPayload{
+			Info: fmt.Sprintf("Hub with id %s already exist", hubId),
 		},
 	})
 	if err != nil {
@@ -207,6 +328,42 @@ func emitNewHubCreated(c *Client, name string) {
 		return
 	}
 	c.Hub.cluster.General.Emit(bts)
+}
+
+func emitClientConnected(c *Client, hub *Hub) {
+	bts, err := jsoniter.Marshal(EventClientConnected{
+		EventHead: &EventHead{
+			Id:     randomId(IdLength),
+			Action: EVENT_CLIENT_CONNECTED,
+			To:     TO_EVERYONE,
+		},
+		Payload: ClientConnectPayload{
+			Name: c.Name,
+		},
+	})
+	if err != nil {
+		log.Println("emitNewHubCreated", err)
+		return
+	}
+	hub.Emit(bts)
+}
+
+func getClientRemoved(name string) []byte {
+	bts, err := jsoniter.Marshal(EventClientConnected{
+		EventHead: &EventHead{
+			Id:     randomId(IdLength),
+			Action: EVENT_CLIENT_REMOVED,
+			To:     TO_EVERYONE,
+		},
+		Payload: ClientConnectPayload{
+			Name: name,
+		},
+	})
+	if err != nil {
+		log.Println("emitClientRemoved", err)
+		return nil
+	}
+	return bts
 }
 
 func consumeHubRemoved(cluster *Cluster, event EventHubRemoved) {
