@@ -1,7 +1,6 @@
 package room
 
 import (
-	"fmt"
 	"github.com/json-iterator/go"
 	"log"
 )
