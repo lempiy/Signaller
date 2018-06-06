@@ -24,13 +24,18 @@ const (
 	EVENT_ANSWER_CONNECTION    = "EVENT_ANSWER_CONNECTION"
 	EVENT_CANDIDATE_CONNECTION = "EVENT_CANDIDATE_CONNECTION"
 
+	EVENT_CLIENT_REPLY_REQUEST  = "EVENT_CLIENT_REPLY_REQUEST"
+	EVENT_CLIENT_REPLY_RESPONSE = "EVENT_CLIENT_REPLY_RESPONSE"
+
 	EVENT_ERROR   = "EVENT_ERROR"
 	EVENT_CONFIRM = "EVENT_CONFIRM"
 
-	IdLength = 12
+	IdLength     = 12
+	ReplyTimeout = time.Second * 5
 )
 
 var letterRunes = []rune("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+var eventsKeyQueue = NewKeyQueue()
 
 func init() {
 	rand.Seed(time.Now().UnixNano())
@@ -156,6 +161,10 @@ func ConsumeEvent(c *Client, event Event) {
 		consumeHubConnectEvent(c, event)
 	case EVENT_GET_CLIENTS:
 		consumeGetClients(c, event)
+	case EVENT_CLIENT_REPLY_REQUEST:
+		consumeClientReplyRequest(c, event)
+	case EVENT_CLIENT_REPLY_RESPONSE:
+		consumeClientReplyResponse(c, event)
 	}
 }
 
@@ -240,6 +249,47 @@ func consumeGetClients(c *Client, event Event) {
 	c.Send(bts)
 }
 
+func consumeClientReplyResponse(c *Client, event Event) {
+	if event.To == "" {
+		clientNotFound(c, "", event.Id)
+		return
+	}
+	ch := eventsKeyQueue.Get(event.Id + event.To)
+	if ch != nil {
+		clientNotWaiting(c, event.To, event.Id)
+		return
+	}
+	ch <- event
+	confirmAction(c, event.Id)
+}
+
+func consumeClientReplyRequest(c *Client, event Event) {
+	if event.To == "" {
+		clientNotFound(c, "", event.Id)
+		return
+	}
+	responder := c.Hub.Get(event.To)
+	bts, err := jsoniter.Marshal(event)
+	if err != nil {
+		log.Println("consumeClientReplyRequest", err)
+		return
+	}
+	reply := make(chan Event)
+	eventsKeyQueue.Set(event.Id+c.Name, reply)
+	responder.Send(bts)
+	select {
+	case e := <-reply:
+		bts, err := jsoniter.Marshal(e)
+		if err != nil {
+			log.Println("consumeClientReplyRequest", err)
+			return
+		}
+		c.Send(bts)
+	case <-time.After(ReplyTimeout):
+		clientAnswerTimeout(c, event.To, event.Id)
+	}
+}
+
 func clientNotFound(c *Client, name string, id string) {
 	bts, err := jsoniter.Marshal(EventError{
 		EventHead: &EventHead{
@@ -253,6 +303,42 @@ func clientNotFound(c *Client, name string, id string) {
 	})
 	if err != nil {
 		log.Println("clientNotFound", err)
+		return
+	}
+	c.Send(bts)
+}
+
+func clientAnswerTimeout(c *Client, name string, id string) {
+	bts, err := jsoniter.Marshal(EventError{
+		EventHead: &EventHead{
+			Id:     id,
+			Action: EVENT_ERROR,
+			To:     c.Name,
+		},
+		Payload: ErrorPayload{
+			Info: fmt.Sprintf("Client with name %s didn't repond", name),
+		},
+	})
+	if err != nil {
+		log.Println("clientAnswerTimeout", err)
+		return
+	}
+	c.Send(bts)
+}
+
+func clientNotWaiting(c *Client, name string, id string) {
+	bts, err := jsoniter.Marshal(EventError{
+		EventHead: &EventHead{
+			Id:     id,
+			Action: EVENT_ERROR,
+			To:     c.Name,
+		},
+		Payload: ErrorPayload{
+			Info: fmt.Sprintf("Client %s is not waiting for response on message with id %s", name, id),
+		},
+	})
+	if err != nil {
+		log.Println("clientNotWaiting", err)
 		return
 	}
 	c.Send(bts)
