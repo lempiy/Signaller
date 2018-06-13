@@ -255,7 +255,7 @@ func consumeClientReplyResponse(c *Client, event Event) {
 		return
 	}
 	ch := eventsKeyQueue.Get(event.Id + event.To)
-	if ch != nil {
+	if ch == nil {
 		clientNotWaiting(c, event.To, event.Id)
 		return
 	}
