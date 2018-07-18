@@ -53,8 +53,17 @@ func Handle(cluster *room.Cluster) echo.HandlerFunc {
 		name := c.QueryParam("name")
 		if name == "" {
 			ws.WriteMessage(websocket.CloseMessage,
-				websocket.FormatCloseMessage(4001, "Player name cannot be empty"),
+				websocket.FormatCloseMessage(4001, "Client name cannot be empty"),
 			)
+			ws.Close()
+			return nil
+		}
+
+		if c := cluster.General.Get(name); c != nil {
+			ws.WriteMessage(websocket.CloseMessage,
+				websocket.FormatCloseMessage(4001, "Client already exists"),
+			)
+			log.Printf("Client with name %s already exist", name)
 			ws.Close()
 			return nil
 		}
