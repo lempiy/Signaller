@@ -79,6 +79,14 @@ func Handle(cluster *room.Cluster) echo.HandlerFunc {
 				cluster.Add(hub)
 			} else {
 				log.Printf("Found hub with ID %s hub length before connection %d", space, hub.Length())
+				if c := hub.Get(name); c != nil {
+					ws.WriteMessage(websocket.CloseMessage,
+						websocket.FormatCloseMessage(4001, "Client already exists"),
+					)
+					log.Printf("Client with name %s already exist on hub %s", name, hub.ID)
+					ws.Close()
+					return nil
+				}
 			}
 		} else {
 			hub = cluster.General

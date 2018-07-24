@@ -49,7 +49,7 @@ func (c *Client) watch() {
 			if err := jsoniter.Unmarshal(msg, &event); err != nil {
 				log.Println("Client "+c.Name+" read error: ", err)
 			}
-			ConsumeEvent(c, event)
+			go ConsumeEvent(c, event)
 		}
 	}
 }
